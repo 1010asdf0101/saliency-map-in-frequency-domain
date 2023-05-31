@@ -10,7 +10,7 @@ from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 device = torch.device('cuda:3')
-paths = Path('/home/shawnman99/data/fst_pellicle_sam_labeled/train').rglob('*.png')
+paths = Path('/home/shawnman99/data/cream/Coining/damaged_bump/').rglob('*.png')
 BATCH_SIZE=16
 ## build dataloader  &  define required functions
 def show_points(coords, labels, ax, marker_size=375):
@@ -25,8 +25,6 @@ class Train_DT(Dataset):
         self.items=[]
         for p in paths:
             img = Image.open(str(p))
-            w, h = img.size
-            #cropped = img.crop((0, 0, w, h))
             self.items.append(trans(img))
     def __len__(self):
         return len(self.items)
@@ -53,8 +51,6 @@ def main():
     dataset = Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
     resizer = torchvision.transforms.Resize((256, 256), antialias=True)
-    kernel = torch.ones((1, 1, 3, 3)) / 9.
-    kernel = kernel.to(device)
     gk = gaussian_kernel(5, 8)
     gk = gk.reshape((1, 1, 5, 5)).to(device)
     start = time.time()
@@ -74,24 +70,21 @@ def main():
         f2 = BY+1j*I
         F1 = torch.fft.fft2(f1)
         F2 = torch.fft.fft2(f2)
-        mag1 = F1.abs()
-        mag2 = F2.abs()
-        mag = torch.sqrt(mag1**2 + mag2**2)
+        mag = torch.sqrt(F1.abs()**2 + F2.abs()**2)
         #remain phase
         F1/=mag
         F2/=mag
         f1 = torch.fft.ifft2(F1)
         f2 = torch.fft.ifft2(F2)
-        mag1 = f1.abs()**2
-        mag2 = f1.abs()**2
-        print(mag1.shape, mag2.shape)
-        mag = mag1+mag2
+        #saliency map proposed by paper S = g*|q'(t)|**2
+        mag = f1.abs()**2+f2.abs()**2
         mag = mag.unsqueeze(1)
         salencyMap = torch.nn.functional.conv2d(mag, gk, padding=2)
         salMap = salencyMap[0].squeeze().detach().cpu().numpy()
-        print(salMap.max(), salMap.min())
         # Display the Result.
-        plt.imshow(salMap)
+        img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
+        plt.subplot(1, 2, 1), plt.imshow(img)
+        plt.subplot(1, 2, 2), plt.imshow(salMap)
         plt.show()
     end = time.time()
     print(f"time : {end-start} / per image : {(end-start)/len(dataset)}")

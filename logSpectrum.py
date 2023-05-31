@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import torch, torchvision
 import matplotlib.pyplot as plt
@@ -33,47 +34,23 @@ def collate_fn(batch):
     ret = torch.stack(batch).to(device)
     return ret
 
-import torch
-import math
-
-def gaussian_kernel(size, sigma):
-    kernel = torch.Tensor(size, size)
-    center = size // 2
-    variance = sigma**2
-    coefficient = 1.0 / (2 * math.pi * variance)
-    for i in range(size):
-        for j in range(size):
-            distance = (i - center)**2 + (j - center)**2
-            kernel[i, j] = coefficient * math.exp(-distance / (2 * variance))
-    kernel = kernel / torch.sum(kernel)
-    return kernel
-
 def main():
+    BATCH_SIZE = 128
     dataset = Train_DT(paths)
-    train_loader = DataLoader(dataset, 16, shuffle=False, collate_fn=collate_fn)
+    train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
     resizer = torchvision.transforms.Resize((256, 256), antialias=True)
-    kernel = torch.ones((1, 1, 3, 3)) / 9.
-    kernel = kernel.to(device)
-    gk = gaussian_kernel(5, 8)
-    gk = gk.reshape((1, 1, 5, 5)).to(device)
     start = time.time()
     for b in train_loader:
         b = resizer(b)
+        h, w = b.shape[-2:]
         fft = torch.fft.fft2(b)
-        fft+=1
-        logAmplitude = torch.log(torch.abs(torch.fft.fftshift(fft)))
-        Phase = torch.angle(fft)
-        avgLogAmp = torch.nn.functional.conv2d(logAmplitude, kernel, padding=1)
-        spectralResidual = logAmplitude - avgLogAmp
-        salencyMap = torch.abs(torch.fft.ifft2(torch.exp(spectralResidual+1j*Phase)))**2
-        print(salencyMap.shape, gk.shape)
-        salencyMap = torch.nn.functional.conv2d(salencyMap, gk, padding=2)
-        salMap = salencyMap[0].squeeze().detach().cpu().numpy()
-        print(salMap.max(), salMap.min())
-        # Display the Result.
-        img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
-        plt.subplot(1, 2, 1), plt.imshow(img)
-        plt.subplot(1, 2, 2), plt.imshow(salMap)
+        logAmplitude = torch.log(fft.abs())
+        batch_mean = torch.mean(logAmplitude.squeeze(), dim = 0)
+        area = batch_mean[:h//2, :w//2]
+        aa = torch.sum(area, dim=0)
+        aa = aa.detach().cpu().numpy()
+        plt.title(f"{BATCH_SIZE}")
+        plt.plot(aa)
         plt.show()
     end = time.time()
     print(f"time : {end-start} / per image : {(end-start)/len(dataset)}")
