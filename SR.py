@@ -49,7 +49,7 @@ def gaussian_kernel(size, sigma):
 
 def main():
     BATCH_SIZE = 16
-    h, w = 64, 64
+    h, w = 256, 256
     dataset = Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
     resizer = torchvision.transforms.Resize((h, w), antialias=True)
