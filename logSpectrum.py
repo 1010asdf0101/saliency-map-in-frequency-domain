@@ -35,7 +35,7 @@ def collate_fn(batch):
     return ret
 
 def main():
-    BATCH_SIZE = 128
+    BATCH_SIZE = 1
     dataset = Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
     resizer = torchvision.transforms.Resize((256, 256), antialias=True)
