@@ -1,3 +1,5 @@
+import torch
+import math
 import numpy as np
 import torch, torchvision
 import matplotlib.pyplot as plt
@@ -33,9 +35,6 @@ def collate_fn(batch):
     ret = torch.stack(batch).to(device)
     return ret
 
-import torch
-import math
-
 def gaussian_kernel(size, sigma):
     kernel = torch.Tensor(size, size)
     center = size // 2
@@ -49,10 +48,12 @@ def gaussian_kernel(size, sigma):
     return kernel
 
 def main():
+    BATCH_SIZE = 16
+    h, w = 256, 256
     dataset = Train_DT(paths)
-    train_loader = DataLoader(dataset, 16, shuffle=False, collate_fn=collate_fn)
-    resizer = torchvision.transforms.Resize((256, 256), antialias=True)
-    kernel = torch.ones((1, 1, 3, 3)) / 9.
+    train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
+    resizer = torchvision.transforms.Resize((h, w), antialias=True)
+    kernel = torch.ones((1, 1, w, h), dtype=torch.float32) / h / w
     kernel = kernel.to(device)
     gk = gaussian_kernel(5, 8)
     gk = gk.reshape((1, 1, 5, 5)).to(device)
@@ -60,14 +61,13 @@ def main():
     for b in train_loader:
         b = resizer(b)
         fft = torch.fft.fft2(b)
-        fft+=1
-        logAmplitude = torch.log(torch.abs(torch.fft.fftshift(fft)))
+        logAmplitude = torch.log(torch.abs(fft))
         Phase = torch.angle(fft)
-        avgLogAmp = torch.nn.functional.conv2d(logAmplitude, kernel, padding=1)
+        avgLogAmp = torch.matmul(logAmplitude, kernel)
         spectralResidual = logAmplitude - avgLogAmp
-        salencyMap = torch.abs(torch.fft.ifft2(torch.exp(spectralResidual+1j*Phase)))**2
-        print(salencyMap.shape, gk.shape)
-        salencyMap = torch.nn.functional.conv2d(salencyMap, gk, padding=2)
+        salencyMap = torch.fft.ifft2(torch.exp(spectralResidual+1j*Phase))
+        salencyMap = salencyMap.abs()**2
+        salencyMap = torch.nn.functional.conv2d(salencyMap, gk, padding=2, stride=1)
         salMap = salencyMap[0].squeeze().detach().cpu().numpy()
         print(salMap.max(), salMap.min())
         # Display the Result.
