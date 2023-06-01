@@ -10,8 +10,8 @@ from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 device = torch.device('cuda:3')
-#paths = Path('/home/shawnman99/data/cream/Coining/missing_bump').rglob('*.png')
-paths = Path('/home/shawnman99/img_intern/sin3').rglob('*.png')
+#paths = Path('/home/shawnman99/data/ss_aoi/BF40077_211008_042659_mv').rglob('*.jpg')
+paths = Path('/home/shawnman99/img_intern/sin3').rglob('*.bmp')
 
 ## build dataloader  &  define required functions
 def show_points(coords, labels, ax, marker_size=375):

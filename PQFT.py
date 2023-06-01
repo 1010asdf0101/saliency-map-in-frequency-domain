@@ -10,7 +10,8 @@ from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 device = torch.device('cuda:3')
-paths = Path('/home/shawnman99/data/cream/Coining/damaged_bump/').rglob('*.png')
+#paths = Path('/home/shawnman99/data/cream/OSP/OSP_decay').rglob('*.png')
+paths = Path('.').rglob('*.bmp')
 BATCH_SIZE=16
 ## build dataloader  &  define required functions
 def show_points(coords, labels, ax, marker_size=375):
@@ -22,10 +23,12 @@ def show_points(coords, labels, ax, marker_size=375):
 class Train_DT(Dataset):
     def __init__(self, paths):
         trans = torchvision.transforms.PILToTensor()
+        resizer = torchvision.transforms.Resize((128, 128), antialias=True)
         self.items=[]
         for p in paths:
-            img = Image.open(str(p))
-            self.items.append(trans(img))
+            img = Image.open(str(p)).convert('RGB')
+            img = resizer(trans(img))
+            self.items.append(img)
     def __len__(self):
         return len(self.items)
     def __getitem__(self, index):
@@ -50,12 +53,10 @@ def gaussian_kernel(size, sigma):
 def main():
     dataset = Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
-    resizer = torchvision.transforms.Resize((256, 256), antialias=True)
     gk = gaussian_kernel(5, 8)
     gk = gk.reshape((1, 1, 5, 5)).to(device)
     start = time.time()
     for b in train_loader:
-        b = resizer(b)
         red = b[:, 0, :, :]
         green = b[:, 1, :, :]
         blue = b[:, 2, :, :]
@@ -79,7 +80,8 @@ def main():
         #saliency map proposed by paper S = g*|q'(t)|**2
         mag = f1.abs()**2+f2.abs()**2
         mag = mag.unsqueeze(1)
-        salencyMap = torch.nn.functional.conv2d(mag, gk, padding=2)
+        mag = torch.nn.ReflectionPad2d(2)(mag)
+        salencyMap = torch.nn.functional.conv2d(mag, gk)
         salMap = salencyMap[0].squeeze().detach().cpu().numpy()
         # Display the Result.
         img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
