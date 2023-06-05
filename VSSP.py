@@ -38,11 +38,12 @@ def collate_fn(batch):
     ret = torch.stack(batch).to(device)
     return ret
 
-def gaussian_kernel(size, sigma):
+def gaussian_kernel(size, t0=0.5):
     kernel = torch.Tensor(size, size)
+    sigma = math.ceil(2**(size-1)*t0)
     center = size // 2
     variance = sigma**2
-    coefficient = 1.0 / (2 * math.pi * variance)
+    coefficient = 1.0 / (math.sqrt(2 * math.pi)*sigma)
     for i in range(size):
         for j in range(size):
             distance = (i - center)**2 + (j - center)**2
@@ -53,8 +54,10 @@ def gaussian_kernel(size, sigma):
 def main():
     dataset = Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
-    gk = gaussian_kernel(5, 8)
-    gk = gk.reshape((1, 1, 5, 5)).to(device)
+    kss = [i for i in range(1, int(math.ceil(math.log2(128))+1), 2)]
+    print('kernel sizes : ', kss)
+    gk = [torch.nn.ZeroPad2d((kss[-1]-k)//2)(gaussian_kernel(k)) for k in kss]
+    gk = torch.stack(gk).unsqueeze(1).to(device)
     start = time.time()
     for b in train_loader:
         red = b[:, 0, :, :]
@@ -67,18 +70,59 @@ def main():
         RG = R - G
         BY = B - Y
         I = (red+green+blue)/3
-        f1 = 1j*I
-        f2 = BY+1j*RG
-        F1 = torch.fft.fft2(f1)
-        F2 = torch.fft.fft2(f2)
-        mag = torch.sqrt(F1.abs()**2 + F2.abs()**2)
-        #remain phase
-        F1/=mag
-        F2/=mag
-        f1 = torch.fft.ifft2(F1)
-        f2 = torch.fft.ifft2(F2)
+        alpha, beta, gamma = 1/np.sqrt(3), 1/np.sqrt(3), 1/np.sqrt(3)
+        F1 = torch.fft.fft2(I)
+        F2 = torch.fft.fft2(RG)
+        F3 = torch.fft.fft2(BY)
+        aa = -alpha*F1.imag - beta*F2.imag - gamma*F3.imag
+        bb = F1.real + gamma*F2.imag - beta*F3.imag
+        cc = F2.real + alpha*F3.imag - gamma*F1.imag
+        dd = F3.real + beta*F1.imag - alpha*F2.imag
+        mag = torch.sqrt(aa**2 + bb**2 + cc**2 + dd**2)
+        #normalize
+        aa/=mag
+        bb/=mag
+        cc/=mag
+        dd/=mag
+        mag.unsqueeze_(1)
+        mag = torch.nn.ReflectionPad2d(gk.shape[-1]//2)(mag)
+        lam = torch.nn.functional.conv2d(mag, gk, groups=1) # F.conv2d(out, in/gr, kH, kW)
+        print(lam.shape)
+        for test in lam[0]:
+            ta = aa*test
+            tb = bb*test
+            tc = cc*test
+            td = dd*test
+            fa = torch.fft.ifft2(ta)
+            fb = torch.fft.ifft2(tb)
+            fc = torch.fft.ifft2(tc)
+            fd = torch.fft.ifft2(td)
+            f1 = fa.real - alpha*fb.imag - beta*fc.imag - gamma*fd.imag
+            f2 = fb.real + alpha*fa.imag + gamma*fc.imag - beta*fd.imag
+            f3 = fc.real + beta*fa.imag + alpha*fd.imag - gamma*fb.imag
+            f4 = fd.real + gamma*fa.imag +beta*fb.imag - alpha*fc.imag
+            #saliency map proposed by paper S = g*|q'(t)|**2
+            mag = f1**2+f2**2+f3**2+f4**2
+            mag = mag[0]
+            salMap = mag.detach().cpu().numpy()
+            salMap = cv2.GaussianBlur(salMap, (5, 5), 8)
+            # Display the Result.
+            img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
+            print(img.shape, salMap.shape)
+            plt.subplot(1, 2, 1), plt.imshow(img)
+            plt.subplot(1, 2, 2), plt.imshow(salMap)
+            plt.show()
+        exit()
+        fa = torch.fft.ifft2(aa)
+        fb = torch.fft.ifft2(bb)
+        fc = torch.fft.ifft2(cc)
+        fd = torch.fft.ifft2(dd)
+        F1 = fa.real - alpha*fb.imag - beta*fc.imag - gamma*fd.imag
+        F2 = fb.real + alpha*fa.imag + gamma*fc.imag - beta*fd.imag
+        F3 = fc.real + beta*fa.imag + alpha*fd.imag - gamma*fb.imag
+        F4 = fd.real + gamma*fa.imag +beta*fb.imag - alpha*fc.imag
         #saliency map proposed by paper S = g*|q'(t)|**2
-        mag = f1.abs()**2+f2.abs()**2
+        mag = F1**2+F2**2+F3**2+F4**2
         mag = mag.unsqueeze(1)
         mag = torch.nn.ReflectionPad2d(2)(mag)
         salencyMap = torch.nn.functional.conv2d(mag, gk)

@@ -63,11 +63,12 @@ def main():
     start = time.time()
     for b in train_loader:
         fft = torch.fft.fft2(b)
-        mag = torch.abs(fft)
-        La = torch.log(mag)
+        mag = torch.abs(fft) # amplitude -> A
+        La = torch.log(mag) # log amplitude
         padded_La = torch.nn.ReflectionPad2d(1)(La)
         avgLogAmp = torch.nn.functional.conv2d(padded_La, kernel)
         SR = torch.exp(La - avgLogAmp)
+        #Q = A*e^(i*P) * SR / mag = SR * e^(i*P)
         fft.real = fft.real * SR / mag
         fft.imag = fft.imag * SR / mag
         f = torch.fft.ifft2(fft)
