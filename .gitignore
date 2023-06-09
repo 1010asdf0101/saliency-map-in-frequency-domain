@@ -1,4 +1,7 @@
+**/__pycache__
 **/*.bmp
 **/*.jpg
 **/*.png
 test.py
+results*/
+*.sh

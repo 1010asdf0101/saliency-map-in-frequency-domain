@@ -1,4 +1,6 @@
 import torch, random
+import numpy as np
+import torch
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('tkagg')
@@ -22,37 +24,47 @@ BATCH_SIZE = 128
 random.seed(17)
 random.shuffle(paths)
 paths = paths[:6528]
+
 def main():
     print('total images : ', len(paths))
-    dataset = tools.Train_DT(paths, is_gray=True)
+    dataset = tools.Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=tools.collate_fn)
-    kernel = torch.ones((1, 1, 3, 3), dtype=torch.float32) / 9.
-    kernel = kernel.to(device)
     gk = tools.gaussian_kernel(5, 8)
     gk = gk.reshape((1, 1, 5, 5)).to(device)
     start = time.time()
     for i, b in enumerate(train_loader):
-        fft = torch.fft.fft2(b)
-        mag = torch.abs(fft) # amplitude -> A
-        La = torch.log(mag) # log amplitude
-        padded_La = torch.nn.ReflectionPad2d(1)(La)
-        avgLogAmp = torch.nn.functional.conv2d(padded_La, kernel)
-        SR = torch.exp(La - avgLogAmp)
-        #Q = A*e^(i*P) * SR / mag = SR * e^(i*P)
-        fft.real = fft.real * SR / mag
-        fft.imag = fft.imag * SR / mag
-        f = torch.fft.ifft2(fft)
-        salencyMap = f.abs()**2
-        padded_Mp = torch.nn.ReflectionPad2d(2)(salencyMap)
-        salencyMap = torch.nn.functional.conv2d(padded_Mp, gk)
+        red = b[:, 0, :, :]
+        green = b[:, 1, :, :]
+        blue = b[:, 2, :, :]
+        R = red - (green+blue)/2
+        G = green - (red+blue)/2
+        B = blue - (red+green)/2
+        Y = (red+green)/2 - torch.abs(red-green)/2 - blue
+        RG = R - G
+        BY = B - Y
+        I = (red+green+blue)/3
+        #add motion value
+        M = I.mean(dim = 0).repeat((b.shape[0], 1, 1)) # PQFT랑 결과가 같음. ㅠ
+        f1 = M+1j*I
+        f2 = BY+1j*RG
+        F1 = torch.fft.fft2(f1)
+        F2 = torch.fft.fft2(f2)
+        mag = torch.sqrt(F1.abs()**2 + F2.abs()**2)
+        #remain phase
+        F1/=mag
+        F2/=mag
+        f1 = torch.fft.ifft2(F1)
+        f2 = torch.fft.ifft2(F2)
+        #saliency map proposed by paper S = g*|q'(t)|**2
+        mag = f1.abs()**2+f2.abs()**2
+        mag = mag.unsqueeze(1)
+        mag = torch.nn.ReflectionPad2d(2)(mag)
+        salencyMap = torch.nn.functional.conv2d(mag, gk)
         salMap = salencyMap[0].squeeze().detach().cpu().numpy()
-        #min-max scaling
-        salMap -= salMap.min()
-        salMap /= salMap.max()
         # Display the Result.
         img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
-        plt.subplot(1, 2, 1), plt.imshow(img, 'gray')
-        plt.subplot(1, 2, 2), plt.imshow(salMap, 'gray')
+        plt.subplot(1, 2, 1), plt.imshow(img)
+        plt.subplot(1, 2, 2), plt.imshow(salMap)
         plt.savefig(f"results_{name.split('/')[-1]}/batch{i}_SR.png", pad_inches=0, bbox_inches='tight')
     end = time.time()
     print(f"time : {end-start} / per image : {(end-start)/len(dataset)}")
