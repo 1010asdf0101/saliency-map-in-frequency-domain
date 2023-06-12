@@ -63,7 +63,7 @@ def main():
         img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
         plt.subplot(1, 2, 1), plt.imshow(img)
         plt.subplot(1, 2, 2), plt.imshow(salMap)
-        plt.savefig(f"results_{name.split('/')[-1]}/batch{i}_SR.png", pad_inches=0, bbox_inches='tight')
+        plt.savefig(f"results_{name.split('/')[-1]}/batch{i}_PQ.png", pad_inches=0, bbox_inches='tight')
     end = time.time()
     print(f"time : {end-start} / per image : {(end-start)/len(dataset)}")
 if __name__ == '__main__':
