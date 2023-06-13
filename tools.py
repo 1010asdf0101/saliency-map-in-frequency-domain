@@ -4,7 +4,8 @@ from PIL import Image
 import torch
 import numpy as np
 device = 'cpu'
-
+h = 128
+w = 128
 def show_points(coords, labels, ax, marker_size=375):
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
@@ -12,7 +13,7 @@ def show_points(coords, labels, ax, marker_size=375):
     ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
 
 class Train_DT(Dataset):
-    def __init__(self, paths, h=128, w=128, is_gray=False):
+    def __init__(self, paths, is_gray=False):
         self.items=paths
         self.trans = torchvision.transforms.PILToTensor()
         self.resizer = torchvision.transforms.Resize((h, w), antialias=True)

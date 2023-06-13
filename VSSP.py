@@ -1,6 +1,5 @@
-import torch
 import numpy as np
-import torch, torchvision
+import torch, torchvision, random
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('tkagg')
@@ -9,28 +8,57 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 import tools
 
+dt = torch.float64 #64 bit float for precise calculation
 device = torch.device('cuda:3')
 tools.device = device
-target_p = '/data/projects/'
-paths = list(Path(target_p).rglob('*.jpg'))
-paths.extend(list(Path(target_p).rglob("*.JPEG")))
-paths.extend(list(Path(target_p).rglob("*.jpeg")))
-paths.extend(list(Path(target_p).rglob("*.png")))
-paths.extend(list(Path(target_p).rglob("*.bmp")))
-BATCH_SIZE=128
+target_p = '.'
+paths = list(Path(target_p).rglob('*.bmp'))
+#paths.extend(list(Path(target_p).rglob("*.JPEG")))
+#paths.extend(list(Path(target_p).rglob("*.jpeg")))
+#paths.extend(list(Path(target_p).rglob("*.png")))
+#paths.extend(list(Path(target_p).rglob("*.bmp")))
+paths = [p for p in paths if 'RAW' not in str(p)] 
+BATCH_SIZE = 128
+random.seed(17)
+random.shuffle(paths)
+paths = paths[:6528]
+
+def gaussian_kernel(size, t0=0.5):
+    kernel = torch.Tensor(size, size)
+    center = size // 2
+    sigma = (2**(size-1))*t0
+    variance = sigma ** 2
+    coefficient = 1.0 / (np.sqrt(2 * np.pi) * sigma)
+    for i in range(size):
+        for j in range(size):
+            distance = (i - center)**2 + (j - center)**2
+            kernel[i, j] = coefficient * np.exp(-distance / (2 * variance))
+    kernel = kernel / torch.sum(kernel)
+    return kernel
+
 
 def main():
+    BATCH_SIZE = max(1, len(paths)//50)
+    softmax = torch.nn.Softmax2d()
+    ref_padder = torch.nn.ReflectionPad2d(2)
     dataset = tools.Train_DT(paths)
     train_loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, collate_fn=tools.collate_fn)
+    # build gaussian kernels with various size
     kss = [i for i in range(1, int(np.ceil(np.log2(128))+1), 2)]
     print('kernel sizes : ', kss)
-    gk = [torch.nn.ZeroPad2d((kss[-1]-k)//2)(tools.gaussian_kernel(k)) for k in kss]
+    gk = [torch.nn.ZeroPad2d((kss[-1]-k)//2)(gaussian_kernel(k).type(dt)) for k in kss]
     gk = torch.stack(gk).unsqueeze(1).to(device)
+    kernel = gaussian_kernel(5).type(dt)
+    kernel = kernel.repeat((len(kss), 1, 1, 1)).to(device)
     start = time.time()
     for b in train_loader:
-        red = b[:, 0, :, :]
-        green = b[:, 1, :, :]
-        blue = b[:, 2, :, :]
+        # scaling to [0, 1]
+        img = b[0]
+        b = b.type(dt)
+        red = b[:, 0, :, :]/255
+        green = b[:, 1, :, :]/255
+        blue = b[:, 2, :, :]/255
+        # calulating Lab
         R = red - (green+blue)/2
         G = green - (red+blue)/2
         B = blue - (red+green)/2
@@ -38,48 +66,52 @@ def main():
         RG = R - G
         BY = B - Y
         I = (red+green+blue)/3
-        alpha, beta, gamma = 1/np.sqrt(3), 1/np.sqrt(3), 1/np.sqrt(3)
-        F1 = torch.fft.fft2(I)
-        F2 = torch.fft.fft2(RG)
-        F3 = torch.fft.fft2(BY)
-        aa = -alpha*F1.imag - beta*F2.imag - gamma*F3.imag
-        bb = F1.real + gamma*F2.imag - beta*F3.imag
-        cc = F2.real + alpha*F3.imag - gamma*F1.imag
-        dd = F3.real + beta*F1.imag - alpha*F2.imag
-        mag = torch.sqrt(aa**2 + bb**2 + cc**2 + dd**2)
-        #normalize
-        aa/=mag
-        bb/=mag
-        cc/=mag
-        dd/=mag
+        # make quaternion
+        f1 = 1j*I
+        f2 = BY+1j*RG
+        F1 = torch.fft.fft2(f1)
+        F2 = torch.fft.fft2(f2)
+        mag = torch.sqrt(F1.abs()**2 + F2.abs()**2)
+        F1/=mag
+        F2/=mag
         mag.unsqueeze_(1)
+        # apply gaussian kernel
         mag = torch.nn.ReflectionPad2d(gk.shape[-1]//2)(mag)
-        lam = torch.nn.functional.conv2d(mag, gk, groups=1) # F.conv2d(out, in/gr, kH, kW)
-        print(lam.shape)
-        for test in lam[0]:
-            ta = aa*test
-            tb = bb*test
-            tc = cc*test
-            td = dd*test
-            fa = torch.fft.ifft2(ta)
-            fb = torch.fft.ifft2(tb)
-            fc = torch.fft.ifft2(tc)
-            fd = torch.fft.ifft2(td)
-            f1 = fa.real - alpha*fb.imag - beta*fc.imag - gamma*fd.imag
-            f2 = fb.real + alpha*fa.imag + gamma*fc.imag - beta*fd.imag
-            f3 = fc.real + beta*fa.imag + alpha*fd.imag - gamma*fb.imag
-            f4 = fd.real + gamma*fa.imag +beta*fb.imag - alpha*fc.imag
-            #saliency map proposed by paper S = g*|q'(t)|**2
-            mag = f1**2+f2**2+f3**2+f4**2
-            mag = mag[0]
-            salMap = mag.detach().cpu().numpy()
-            salMap = cv2.GaussianBlur(salMap, (5, 5), 8)
-            # Display the Result.
-            img = b[0].permute([1, 2, 0]).detach().cpu().numpy()
-            print(img.shape, salMap.shape)
-            plt.subplot(1, 2, 1), plt.imshow(img)
-            plt.subplot(1, 2, 2), plt.imshow(salMap)
-            plt.show()
+        lam = torch.nn.functional.conv2d(mag, gk, groups=1) # F.conv2d kernel shape=(out_ch, in_ch/grp, kH, kW)
+        Lambda1 = lam*F1.repeat(1, len(kss), 1, 1)
+        Lambda2 = lam*F2.repeat(1, len(kss), 1, 1)
+        f1 = torch.fft.ifft2(Lambda1)
+        f2 = torch.fft.ifft2(Lambda2)
+        mag = torch.sqrt(f1.abs()**2 + f2.abs()**2)
+        mag = ref_padder(mag)
+        salency_set = torch.nn.functional.conv2d(mag, kernel, groups=len(kss))
+        # calculating entropy 2D
+        p_sal = softmax(salency_set)
+        p_sal = ref_padder(p_sal) # (B, C, H, W)
+        gk = tools.gaussian_kernel(5, 0.03).type(dt)
+        gk = gk.repeat((len(kss), 1, 1, 1)).to(device)
+        p_sal = torch.nn.functional.conv2d(p_sal, gk, groups=len(kss))
+        entropy = torch.sum(-p_sal*torch.log(p_sal), dim=(2, 3))
+        # calculating lambda_k
+        summation = torch.sum(salency_set, dim=(2, 3)).reshape((1, len(kss), 1, 1))
+        normalizedSal = salency_set/summation
+        gk = tools.gaussian_kernel(tools.h, tools.h/4).to(device)
+        gk = gk.repeat(1, 4, 1, 1)
+        lambda_k = gk * normalizedSal
+        lambda_k = 1/lambda_k.sum(dim = (2, 3))
+        res = entropy*lambda_k
+        properK = torch.argmin(res, dim = 1)
+        #show images
+        img = img.permute([1, 2, 0]).detach().cpu().numpy().astype(np.uint8)
+        sal = salency_set[0, properK]
+        sal -= sal.min()
+        sal /= sal.max()
+        sal *= 255
+        sal = sal.permute([1, 2, 0]).detach().cpu().numpy().astype(np.uint8)
+        plt.title(f"Kernel Size : {properK}")
+        plt.subplot(1, 2, 1), plt.imshow(img)
+        plt.subplot(1, 2, 2), plt.imshow(sal)
+        plt.show()        
     end = time.time()
     print(f"time : {end-start} / per image : {(end-start)/len(dataset)}")
 if __name__ == '__main__':
